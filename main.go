@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,8 +13,15 @@ import (
 	"gorm.io/gorm"
 )
 
+type CommonFields struct {
+	ID        uint       `gorm:"primaryKey, index" json:"id"`
+	CreatedAt time.Time  `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
+	DeletedAt *time.Time `gorm:"index" json:"deleted_at"`
+}
+
 type User struct {
-	gorm.Model
+	CommonFields
 	Name        string `json:"name"`
 	Email       string `json:"email"`
 	Password    string `json:"password"`
@@ -27,7 +36,7 @@ const (
 )
 
 type Transaction struct {
-	gorm.Model
+	CommonFields
 	Type        TransactionType `json:"type"`
 	Description string          `json:"description"`
 	Date        time.Time       `json:"date"`
@@ -37,16 +46,17 @@ type Transaction struct {
 }
 
 type Category struct {
-	gorm.Model
-	Name        string `json:"name"`
-	Transaction []Transaction
+	CommonFields
+	Name        string        `json:"name"`
+	Transaction []Transaction `json:"transactions"`
 }
 
-var db gorm.DB
+var db *gorm.DB
+var dbError error
 
 func main() {
-	db, err := gorm.Open(sqlite.Open("development.db"), &gorm.Config{})
-	if err != nil {
+	db, dbError = gorm.Open(sqlite.Open("development.db"), &gorm.Config{})
+	if dbError != nil {
 		panic("Failed to connecting to database!")
 	}
 
@@ -73,13 +83,64 @@ func main() {
 		r.Post("/", addCategory)
 	})
 
-	http.ListenAndServe(":8000", r)
+	r.Route("/users", func(r chi.Router) {
+		r.Post("/register", registerUser)
+		r.Post("/login", loginUser)
+	})
+
+	// For Development Purposes
+	r.Post("/reset", func(w http.ResponseWriter, r *http.Request) {
+		db.Exec("DELETE FROM transactions")
+		db.Exec("DELETE FROM categories")
+		db.Exec("DELETE FROM users")
+		render.JSON(w, r, struct {
+			Message string `json:"message"`
+		}{
+			Message: "Succesfully reset database!",
+		})
+	})
+
+	port := ":8000"
+	fmt.Println("Server listening on http://localhost" + port)
+	http.ListenAndServe(port, r)
 }
 
 func allCategory(w http.ResponseWriter, r *http.Request) {
 	var categories []Category
+	db.Find(&categories)
+	render.JSON(w, r, categories)
 }
 
 func addCategory(w http.ResponseWriter, r *http.Request) {
+	var category Category
+	json.NewDecoder(r.Body).Decode(&category)
+	db.Create(&category)
+	render.JSON(w, r, category)
+}
 
+func registerUser(w http.ResponseWriter, r *http.Request) {
+	// TODO - Hash password
+	var user User
+	json.NewDecoder(r.Body).Decode(&user)
+	db.Create(&user)
+	render.JSON(w, r, user)
+}
+
+func loginUser(w http.ResponseWriter, r *http.Request) {
+	// TODO - Implement proper login method
+	var request map[string]string
+	json.NewDecoder(r.Body).Decode(&request)
+
+	var user User
+	result := db.Where(&User{Email: request["email"], Password: request["password"]}).First(&user)
+	if result.Error != nil {
+		render.JSON(w, r, struct {
+			Message string `json:"message"`
+		}{
+			Message: "User not found",
+		})
+		return
+	}
+
+	render.JSON(w, r, user)
 }
