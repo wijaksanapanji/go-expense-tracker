@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
+	"github.com/go-chi/jwtauth"
 	"github.com/go-chi/render"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -24,7 +25,7 @@ type User struct {
 	CommonFields
 	Name        string `json:"name"`
 	Email       string `json:"email"`
-	Password    string `json:"password"`
+	Password    string `json:"-"`
 	Transaction []Transaction
 }
 
@@ -53,8 +54,15 @@ type Category struct {
 
 var db *gorm.DB
 var dbError error
+var tokenAuth *jwtauth.JWTAuth
+
+const (
+	secretKey string = "SECRET_KEY"
+)
 
 func main() {
+	tokenAuth = jwtauth.New("HS256", []byte(secretKey), nil)
+
 	db, dbError = gorm.Open(sqlite.Open("development.db"), &gorm.Config{})
 	if dbError != nil {
 		panic("Failed to connecting to database!")
@@ -84,11 +92,19 @@ func main() {
 	})
 
 	r.Route("/users", func(r chi.Router) {
+		r.Get("/", allUser)
 		r.Post("/register", registerUser)
 		r.Post("/login", loginUser)
+
+		r.Group(func(r chi.Router) {
+			r.Use(jwtauth.Verifier(tokenAuth))
+			r.Use(jwtauth.Authenticator)
+
+			r.Get("/profile", profileUser)
+		})
 	})
 
-	// For Development Purposes
+	// DEV - For Development Purposes
 	r.Post("/reset", func(w http.ResponseWriter, r *http.Request) {
 		db.Exec("DELETE FROM transactions")
 		db.Exec("DELETE FROM categories")
@@ -118,6 +134,13 @@ func addCategory(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, category)
 }
 
+// DEV - For Development Purposes
+func allUser(w http.ResponseWriter, r *http.Request) {
+	var users []User
+	db.Find(&users)
+	render.JSON(w, r, users)
+}
+
 func registerUser(w http.ResponseWriter, r *http.Request) {
 	// TODO - Hash password
 	var user User
@@ -141,6 +164,23 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	_, token, _ := tokenAuth.Encode(map[string]interface{}{"id": user.ID})
+
+	render.JSON(w, r, struct {
+		Token string `json:"token"`
+	}{
+		Token: token,
+	})
+}
+
+func profileUser(w http.ResponseWriter, r *http.Request) {
+	// TODO - Get user by ID
+	_, claims, _ := jwtauth.FromContext(r.Context())
+
+	var user User
+	user.ID = uint(claims["id"].(float64))
+	db.First(&user)
 
 	render.JSON(w, r, user)
 }
