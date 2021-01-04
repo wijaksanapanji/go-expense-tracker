@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/go-chi/chi"
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/jwtauth"
@@ -25,7 +27,7 @@ type User struct {
 	CommonFields
 	Name        string `json:"name"`
 	Email       string `json:"email"`
-	Password    string `json:"-"`
+	Password    string `json:"password"`
 	Transaction []Transaction
 }
 
@@ -142,9 +144,18 @@ func allUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerUser(w http.ResponseWriter, r *http.Request) {
-	// TODO - Hash password
 	var user User
 	json.NewDecoder(r.Body).Decode(&user)
+	hashedPassword, err := hashPassword(user.Password)
+	if err != nil {
+		render.JSON(w, r, struct {
+			Message string `json:"message"`
+		}{
+			Message: "Failed to create user",
+		})
+		return
+	}
+	user.Password = hashedPassword
 	db.Create(&user)
 	render.JSON(w, r, user)
 }
@@ -155,7 +166,7 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&request)
 
 	var user User
-	result := db.Where(&User{Email: request["email"], Password: request["password"]}).First(&user)
+	result := db.Where(&User{Email: request["email"]}).First(&user)
 	if result.Error != nil {
 		render.JSON(w, r, struct {
 			Message string `json:"message"`
@@ -165,17 +176,28 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, token, _ := tokenAuth.Encode(map[string]interface{}{
-		"id":    user.ID,
-		"name":  user.Name,
-		"email": user.Email,
-	})
+	match := checkHashPassword(request["password"], user.Password)
+	if match {
+		_, token, _ := tokenAuth.Encode(map[string]interface{}{
+			"id":    user.ID,
+			"name":  user.Name,
+			"email": user.Email,
+		})
+
+		render.JSON(w, r, struct {
+			Token string `json:"token"`
+		}{
+			Token: token,
+		})
+		return
+	}
 
 	render.JSON(w, r, struct {
-		Token string `json:"token"`
+		Message string `json:"message"`
 	}{
-		Token: token,
+		Message: "Wrong password",
 	})
+
 }
 
 func profileUser(w http.ResponseWriter, r *http.Request) {
@@ -184,4 +206,14 @@ func profileUser(w http.ResponseWriter, r *http.Request) {
 	user.ID = uint(claims["id"].(float64))
 	db.First(&user)
 	render.JSON(w, r, user)
+}
+
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(bytes), err
+}
+
+func checkHashPassword(password string, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
