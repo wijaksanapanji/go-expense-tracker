@@ -165,7 +165,11 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, token, _ := tokenAuth.Encode(map[string]interface{}{"id": user.ID})
+	_, token, _ := tokenAuth.Encode(map[string]interface{}{
+		"id":    user.ID,
+		"name":  user.Name,
+		"email": user.Email,
+	})
 
 	render.JSON(w, r, struct {
 		Token string `json:"token"`
@@ -175,12 +179,9 @@ func loginUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func profileUser(w http.ResponseWriter, r *http.Request) {
-	// TODO - Get user by ID
 	_, claims, _ := jwtauth.FromContext(r.Context())
-
 	var user User
 	user.ID = uint(claims["id"].(float64))
 	db.First(&user)
-
 	render.JSON(w, r, user)
 }
